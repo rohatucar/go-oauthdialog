@@ -3,8 +3,11 @@ package oauthdialog
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/skratchdot/open-golang/open"
 	"golang.org/x/oauth2"
@@ -12,29 +15,29 @@ import (
 
 // OAuth2 errors defined in RFC 6749 section 4.1.2.1.
 var (
-	ErrInvalidRequest = errors.New("Invalid request")
-	ErrUnauthorizedClient = errors.New("Client not authorized")
-	ErrAccessDenied = errors.New("Access denied")
+	ErrInvalidRequest          = errors.New("Invalid request")
+	ErrUnauthorizedClient      = errors.New("Client not authorized")
+	ErrAccessDenied            = errors.New("Access denied")
 	ErrUnsupportedResponseType = errors.New("Unsupported response type")
-	ErrInvalidScope = errors.New("Invalid scope")
-	ErrServerError = errors.New("Server error")
-	ErrTemporarilyUnavailable = errors.New("Temporarily unavailable")
+	ErrInvalidScope            = errors.New("Invalid scope")
+	ErrServerError             = errors.New("Server error")
+	ErrTemporarilyUnavailable  = errors.New("Temporarily unavailable")
 )
 
 var errorsByName = map[string]error{
-	"invalid_request": ErrInvalidRequest,
-	"unauthorized_client": ErrUnauthorizedClient,
-	"access_denied": ErrAccessDenied,
+	"invalid_request":           ErrInvalidRequest,
+	"unauthorized_client":       ErrUnauthorizedClient,
+	"access_denied":             ErrAccessDenied,
 	"unsupported_response_type": ErrUnsupportedResponseType,
-	"invalid_scope": ErrInvalidScope,
-	"server_error": ErrServerError,
-	"temporarily_unavailable": ErrTemporarilyUnavailable,
+	"invalid_scope":             ErrInvalidScope,
+	"server_error":              ErrServerError,
+	"temporarily_unavailable":   ErrTemporarilyUnavailable,
 }
 
 type handlerResponse struct {
 	State string
 
-	Code string
+	Code  string
 	Error string
 }
 
@@ -51,17 +54,33 @@ type Dialog struct {
 	SuccessHandler http.HandlerFunc
 
 	config *oauth2.Config
-	done chan *handlerResponse
+	done   chan *handlerResponse
 }
 
 // Open the dialog.
 func (d *Dialog) Open() (code string, err error) {
 	// Start local HTTP server
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return
-	}
 
+	redirect_url := d.config.RedirectURL
+	if redirect_url == "" {
+		redirect_url = "http://127.0.0.1:80"
+	}
+	var ln net.Listener
+	if strings.HasPrefix(redirect_url, "http://127.0.0.1") || strings.HasPrefix(redirect_url, "http://localhost") {
+		u, err := url.Parse(redirect_url)
+		if err != nil {
+			return "", err
+		}
+		host := u.Hostname()
+		port := u.Port()
+		if redirect_url == "http://127.0.0.1" || redirect_url == "http://localhost" {
+			port = "80"
+		}
+		ln, err = net.Listen("tcp", fmt.Sprintf("%s:%s", host, port))
+		if err != nil {
+			return "", err
+		}
+	}
 	d.done = make(chan *handlerResponse)
 	defer close(d.done)
 
@@ -70,7 +89,7 @@ func (d *Dialog) Open() (code string, err error) {
 	defer ln.Close()
 
 	conf := d.config
-	conf.RedirectURL = "http://" + ln.Addr().String()
+	conf.RedirectURL = redirect_url
 
 	state, err := generateState()
 	if err != nil {
@@ -111,7 +130,7 @@ func (d *Dialog) serveHTTP(w http.ResponseWriter, req *http.Request) {
 
 	res := &handlerResponse{
 		State: q.Get("state"),
-		Code: q.Get("code"),
+		Code:  q.Get("code"),
 		Error: q.Get("error"),
 	}
 
@@ -130,9 +149,9 @@ func (d *Dialog) serveHTTP(w http.ResponseWriter, req *http.Request) {
 // Create a new OAuth2 dialog.
 func New(conf *oauth2.Config) *Dialog {
 	return &Dialog{
-		Cancel: make(chan bool),
+		Cancel:         make(chan bool),
 		SuccessHandler: defaultSuccessHandler,
-		config: conf,
+		config:         conf,
 	}
 }
 
